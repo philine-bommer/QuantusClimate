@@ -3,6 +3,7 @@
 from typing import Any, Callable, Dict, List, Optional, Tuple
 import itertools
 import numpy as np
+from tqdm import tqdm
 
 from ..base import PerturbationMetric
 from ...helpers import utils
@@ -174,27 +175,14 @@ class Continuity(PerturbationMetric):
     ) -> Dict:
 
         results = {k: [] for k in range(self.nr_patches + 1)}
+        a_perturbed_batch, x_perturbed = p[0], p[1]
 
         for step in range(self.nr_steps):
 
             # Generate explanation based on perturbed input x.
-            dx_step = (step + 1) * self.dx
-            x_perturbed = self.perturb_func(
-                arr=x,
-                indices=np.arange(0, x.size),
-                indexed_axes=np.arange(0, x.ndim),
-                perturb_dx=dx_step,
-                **self.perturb_func_kwargs,
-            )
-            x_input = model.shape_input(x_perturbed, x.shape, channel_first=True)
+            x_input = x_perturbed[step]
+            a_perturbed = a_perturbed_batch[step]
 
-            # Generate explanations on perturbed input.
-            a_perturbed = self.explain_func(
-                model=model.get_model(),
-                inputs=x_input,
-                targets=y,
-                **self.explain_func_kwargs,
-            )
             # Taking the first element, since a_perturbed will be expanded to a batch dimension
             # not expected by the current index management functions.
             a_perturbed = utils.expand_attribution_channel(a_perturbed, x_input)[0]
@@ -273,6 +261,55 @@ class Continuity(PerturbationMetric):
 
         self.dx = np.prod(x_batch.shape[2:]) // self.nr_steps
 
+        # Create array to save intermediary results.
+
+        perturbed_samples = np.zeros((x_batch.shape[0], self.nr_samples,
+                                      *model.shape_input(x_batch[0], x_batch[0].shape, channel_first=True).shape),
+                                     dtype=float)
+
+        # Create progress bar if desired.
+        iterator = tqdm(
+            enumerate(
+                zip(
+                    x_batch,
+                    y_batch,
+                )
+            ),
+            total=len(x_batch),
+            disable=not self.display_progressbar,
+            desc=f"Preparing perturbations for {self.__class__.__name__}",
+        )
+
+        for ix, (x, y) in iterator:
+            for j in range(self.nr_steps):
+
+                # Generate explanation based on perturbed input x.
+                dx_step = (j + 1) * self.dx
+                x_perturbed = self.perturb_func(
+                    arr=x,
+                    indices=np.arange(0, x.size),
+                    indexed_axes=np.arange(0, x.ndim),
+                    perturb_dx=dx_step,
+                    **self.perturb_func_kwargs,
+                )
+                x_input = model.shape_input(x_perturbed, x.shape, channel_first=True)
+
+                # Append to samples.
+                perturbed_samples[ix, j, :] = x_input
+
+        # Generate explanations on perturbed input.
+        a_perturbed_all = self.explain_func(
+            model=model.get_model(),
+            inputs=perturbed_samples.reshape(x_batch.shape[0] * self.nr_samples,
+                                             *model.shape_input(x_batch[0], x_batch[0].shape,
+                                                                channel_first=True).shape),
+            targets=np.tile(y_batch, self.nr_samples),
+            **self.explain_func_kwargs,
+        )
+        ap = a_perturbed_all.reshape((x_batch.shape[0], self.nr_samples,
+                                                           *model.shape_input(x_batch[0], x_batch[0].shape,
+                                                                              channel_first=True).shape))
+        custom_preprocess_batch = (ap, perturbed_samples)
         # Asserts.
         # Additional explain_func assert, as the one in prepare() won't be
         # executed when a_batch != None.

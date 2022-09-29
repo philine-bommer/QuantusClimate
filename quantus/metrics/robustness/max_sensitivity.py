@@ -2,6 +2,8 @@
 
 from typing import Any, Callable, Dict, List, Optional, Tuple
 import numpy as np
+from tqdm import tqdm
+
 
 from ..base import PerturbationMetric
 from ...helpers import warn_func
@@ -177,25 +179,9 @@ class MaxSensitivity(PerturbationMetric):
     ) -> float:
 
         sensitivities_norm_max = 0.0
-        for _ in range(self.nr_samples):
+        for j in range(self.nr_samples):
 
-            # Perturb input.
-            x_perturbed = self.perturb_func(
-                arr=x,
-                indices=np.arange(0, x.size),
-                indexed_axes=np.arange(0, x.ndim),
-                **self.perturb_func_kwargs,
-            )
-            x_input = model.shape_input(x_perturbed, x.shape, channel_first=True)
-            asserts.assert_perturbation_caused_change(x=x, x_perturbed=x_perturbed)
-
-            # Generate explanation based on perturbed input x.
-            a_perturbed = self.explain_func(
-                model=model.get_model(),
-                inputs=x_input,
-                targets=y,
-                **self.explain_func_kwargs,
-            )
+            a_perturbed = p[j]
 
             if self.normalise:
                 a_perturbed = self.normalise_func(a_perturbed)
@@ -225,8 +211,49 @@ class MaxSensitivity(PerturbationMetric):
     ) -> Tuple[
         ModelInterface, np.ndarray, np.ndarray, np.ndarray, np.ndarray, Any, Any
     ]:
+        # Create array to save intermediary results.
 
-        custom_preprocess_batch = [None for _ in x_batch]
+        perturbed_samples = np.zeros((x_batch.shape[0], self.nr_samples, *model.shape_input(x_batch[0], x_batch[0].shape, channel_first=True).shape),
+                                     dtype=float)
+
+        # Create progress bar if desired.
+        iterator = tqdm(
+            enumerate(
+                zip(
+                    x_batch,
+                    y_batch,
+                )
+            ),
+            total=len(x_batch),
+            disable=not self.display_progressbar,
+            desc=f"Preparing perturbations for {self.__class__.__name__}",
+        )
+
+        for ix, (x, y) in iterator:
+            for j in range(self.nr_samples):
+
+                # Perturb input.
+                x_perturbed = self.perturb_func(
+                    arr=x,
+                    indices=np.arange(0, x.size),
+                    indexed_axes=np.arange(0, x.ndim),
+                    **self.perturb_func_kwargs,
+                )
+                x_input = model.shape_input(x_perturbed, x.shape, channel_first=True)
+                asserts.assert_perturbation_caused_change(x=x, x_perturbed=x_perturbed)
+
+                # Append to samples.
+                perturbed_samples[ix, j, :] = x_input
+
+        # Generate explanation based on perturbed input x.
+        a_perturbed_all = self.explain_func(
+            model=model.get_model(),
+            inputs=perturbed_samples.reshape(x_batch.shape[0]*self.nr_samples, *model.shape_input(x_batch[0], x_batch[0].shape, channel_first=True).shape),
+            targets=np.tile(y_batch, self.nr_samples),
+            **self.explain_func_kwargs,
+        )
+
+        custom_preprocess_batch = a_perturbed_all.reshape((x_batch.shape[0], self.nr_samples, *model.shape_input(x_batch[0], x_batch[0].shape, channel_first=True).shape))
 
         # Additional explain_func assert, as the one in prepare() won't be
         # executed when a_batch != None.
