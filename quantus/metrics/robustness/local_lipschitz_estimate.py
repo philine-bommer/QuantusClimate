@@ -3,6 +3,7 @@
 from typing import Any, Callable, Dict, List, Optional, Tuple
 import numpy as np
 from tqdm import tqdm
+import pdb
 
 
 from ..base import PerturbationMetric
@@ -185,8 +186,8 @@ class LocalLipschitzEstimate(PerturbationMetric):
         p: Any,
     ) -> float:
 
-        a_perturbed_batch, x_perturbed_batch = p[0], p[1]
-
+        a_perturbed_batch = p[0]
+        x_perturbed_batch = p[1]
         similarity_max = 0.0
         for j in range(self.nr_samples):
 
@@ -272,7 +273,9 @@ class LocalLipschitzEstimate(PerturbationMetric):
         ap = a_perturbed_all.reshape((x_batch.shape[0], self.nr_samples,
                                                            *model.shape_input(x_batch[0], x_batch[0].shape,
                                                                               channel_first=True).shape))
-        custom_preprocess_batch = (ap, perturbed_samples)
+        custom_preprocess_batch = []
+        for h in range(x_batch.shape[0]):
+            custom_preprocess_batch.append([ap[h], perturbed_samples[h]])
 
         # Additional explain_func assert, as the one in prepare() won't be
         # executed when a_batch != None.

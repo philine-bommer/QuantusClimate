@@ -7,12 +7,12 @@ from importlib import util
 from skimage.segmentation import slic, felzenszwalb
 from ..helpers.model_interface import ModelInterface
 from ..helpers import asserts
+import keras
 
 if util.find_spec("torch"):
     import torch
     from ..helpers.pytorch_model import PyTorchModel
 if util.find_spec("tensorflow"):
-    import tensorflow as tf
     from ..helpers.tf_model import TensorFlowModel
 
 
@@ -239,7 +239,7 @@ def get_wrapped_model(
     -------
     model (ModelInterface): A wrapped ModelInterface model.
     """
-    if isinstance(model, tf.keras.Model):
+    if isinstance(model, keras.Model):
         return TensorFlowModel(
             model=model,
             channel_first=channel_first,

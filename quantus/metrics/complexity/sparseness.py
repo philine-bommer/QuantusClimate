@@ -144,4 +144,6 @@ class Sparseness(Metric):
         score = (np.sum((2 * np.arange(1, a.shape[0] + 1) - a.shape[0] - 1) * a)) / (
             a.shape[0] * np.sum(a)
         )
+        # 1 -2(np.sum((np.arange(1, a.shape[0] + 1) + a.shape[0] - 0.5) *a /(
+           # a.shape[0] * np.sum(a)))
         return score

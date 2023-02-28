@@ -2,6 +2,8 @@
 
 from typing import Any, Callable, Dict, List, Optional, Tuple
 import numpy as np
+from tqdm import tqdm
+import pdb
 
 from ..base import PerturbationMetric
 from ...helpers import warn_func
@@ -155,25 +157,25 @@ class ROAD(PerturbationMetric):
     ) -> List[float]:
 
         # Order indices.
-        ordered_indices = np.argsort(a, axis=None)[::-1]
+        # ordered_indices = np.argsort(a, axis=None)[::-1]
 
         results_instance = np.array([None for _ in self.percentages])
 
-        for p_ix, p in enumerate(self.percentages):
-            top_k_indices = ordered_indices[: int(self.a_size * p / 100)]
-
-            x_perturbed = self.perturb_func(
-                arr=x,
-                indices=top_k_indices,
-                **self.perturb_func_kwargs,
-            )
-
-            asserts.assert_perturbation_caused_change(x=x, x_perturbed=x_perturbed)
-
-            # Predict on perturbed input x and store the difference from predicting on unperturbed input.
-            x_input = model.shape_input(x_perturbed, x.shape, channel_first=True)
-            class_pred_perturb = np.argmax(model.predict(x_input))
-
+        for p_ix, perc in enumerate(self.percentages):
+            # top_k_indices = ordered_indices[: int(self.a_size * p / 100)]
+            #
+            # x_perturbed = self.perturb_func(
+            #     arr=x,
+            #     indices=top_k_indices,
+            #     **self.perturb_func_kwargs,
+            # )
+            #
+            # asserts.assert_perturbation_caused_change(x=x, x_perturbed=x_perturbed)
+            #
+            # # Predict on perturbed input x and store the difference from predicting on unperturbed input.
+            # x_input = model.shape_input(x_perturbed, x.shape, channel_first=True)
+            # class_pred_perturb = np.argmax(model.predict(x_input))
+            class_pred_perturb = p[p_ix]
             # Write a boolean into the percentage results.
             results_instance[p_ix] = int(y == class_pred_perturb)
 
@@ -192,10 +194,58 @@ class ROAD(PerturbationMetric):
         ModelInterface, np.ndarray, np.ndarray, np.ndarray, np.ndarray, Any, Any
     ]:
 
-        custom_preprocess_batch = [None for _ in x_batch]
-
-        # Infer the size of attributions.
+        iterator = tqdm(
+            enumerate(
+                zip(
+                    x_batch,
+                    y_batch,
+                    a_batch,
+                )
+            ),
+            total=len(x_batch),
+            disable=not self.display_progressbar,
+            desc=f"Evaluating {self.__class__.__name__}",
+        )
         self.a_size = a_batch[0, :, :].size
+
+        perturbed_samples = np.zeros((x_batch.shape[0], len(self.percentages),
+                                      *model.shape_input(x_batch[0], x_batch[0].shape, channel_first=True).shape),
+                                     dtype=float)
+
+        for ix, (x, y, a) in iterator:
+            # Order indices.
+            ordered_indices = np.argsort(a, axis=None)[::-1]
+
+            for p_ix, p in enumerate(self.percentages):
+
+                top_k_indices = ordered_indices[: int(self.a_size * p / 100)]
+
+                x_perturbed = self.perturb_func(
+                    arr=x,
+                    indices=top_k_indices,
+                    **self.perturb_func_kwargs,
+                )
+
+                asserts.assert_perturbation_caused_change(x=x, x_perturbed=x_perturbed)
+
+                # Predict on perturbed input x and store the difference from predicting on unperturbed input.
+                x_input = model.shape_input(x_perturbed, x.shape, channel_first=True)
+
+                # Append to samples.
+                perturbed_samples[ix, p_ix, :] = x_input
+
+        # Predict on perturbed input x.
+        try:
+            y_pert_samples = model.predict(perturbed_samples.reshape(x_batch.shape[0] *len(self.percentages),
+                                                                     *x_batch[0].flatten().shape)).astype(float)
+        except:
+            y_pert_samples = model.predict(perturbed_samples.reshape(x_batch.shape[0] *len(self.percentages),
+                                                                     *x_batch[0].shape[1:],1)).astype(float)
+
+        custom_preprocess_batch = np.argmax(y_pert_samples, axis = 1).reshape(x_batch.shape[0],len(self.percentages))
+        # Infer the size of attributions.
+
+
 
         return (
             model,

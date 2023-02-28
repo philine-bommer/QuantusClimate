@@ -1,10 +1,11 @@
 """This model creates the ModelInterface for Tensorflow."""
 from typing import Any, Dict, Optional, Tuple
 
-from tensorflow.keras.layers import Dense
-from tensorflow.keras import activations
-from tensorflow.keras import Model
-from tensorflow.keras.models import clone_model
+from keras.activations import linear, softmax
+from keras.layers import Dense, Activation
+from keras import Model
+from keras import backend as K
+from keras.models import clone_model
 import numpy as np
 
 from ..helpers.model_interface import ModelInterface
@@ -35,21 +36,26 @@ class TensorFlowModel(ModelInterface):
         predict_kwargs = {**self.predict_kwargs, **kwargs}
 
         output_act = self.model.layers[-1].activation
-        target_act = activations.softmax if self.softmax else activations.linear
+        target_act = softmax if self.softmax else linear
 
         if output_act == target_act:
-            return self.model(x, training=False, **predict_kwargs).numpy()
+            return self.model.predict(x)
 
         config = self.model.layers[-1].get_config()
         config["activation"] = target_act
 
         weights = self.model.layers[-1].get_weights()
 
-        output_layer = Dense(**config)(self.model.layers[-2].output)
-        new_model = Model(inputs=[self.model.input], outputs=[output_layer])
-        new_model.layers[-1].set_weights(weights)
+        if isinstance(self.model.layers[-1], Activation):
+            output_layer = self.model.layers[-2].output
+            new_model = Model(inputs=[self.model.input], outputs=[output_layer])
+        else:
 
-        return new_model(x, training=False, **predict_kwargs).numpy()
+            output_layer = Dense(**config)(self.model.layers[-2].output)
+            new_model = Model(inputs=[self.model.input], outputs=[output_layer])
+            new_model.layers[-1].set_weights(weights)
+
+        return new_model.predict(x)
 
     def shape_input(
         self,
@@ -64,6 +70,7 @@ class TensorFlowModel(ModelInterface):
         """
         if channel_first is None:
             channel_first = utils.infer_channel_first
+        x = x.reshape(-1, *self.model.input_shape[1:])
         # Expand first dimension if this is just a single instance.
         if not batched:
             x = x.reshape(1, *shape)

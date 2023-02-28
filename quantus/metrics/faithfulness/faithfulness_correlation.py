@@ -2,6 +2,8 @@
 
 from typing import Any, Callable, Dict, List, Optional, Tuple
 import numpy as np
+from tqdm import tqdm
+import pdb
 
 from ..base import PerturbationMetric
 from ...helpers import warn_func
@@ -176,27 +178,23 @@ class FaithfulnessCorrelation(PerturbationMetric):
 
         # Predict on input.
         x_input = model.shape_input(x, x.shape, channel_first=True)
-        y_pred = float(model.predict(x_input)[:, y])
+        try:
+            y_pred = float(model.predict(x_input.flatten()[np.newaxis,:])[:, y])
+        except:
+            y_pred = float(model.predict(x_input[0,:,:,:,np.newaxis])[:, y])
 
         pred_deltas = []
         att_sums = []
+        a_ix_set = p[0]
+        y_pred_perturb_set= p[1]
+
 
         # For each test data point, execute a couple of runs.
         for i_ix in range(self.nr_runs):
 
-            # Randomly mask by subset size.
-            a_ix = np.random.choice(a.shape[0], self.subset_size, replace=False)
-            x_perturbed = self.perturb_func(
-                arr=x,
-                indices=a_ix,
-                indexed_axes=self.a_axes,
-                **self.perturb_func_kwargs,
-            )
-            asserts.assert_perturbation_caused_change(x=x, x_perturbed=x_perturbed)
-
-            # Predict on perturbed input x.
-            x_input = model.shape_input(x_perturbed, x.shape, channel_first=True)
-            y_pred_perturb = float(model.predict(x_input)[:, y])
+            a_ix = a_ix_set[i_ix]
+            y_pred_perturb = y_pred_perturb_set[i_ix][y]
+            # y_pred_perturb = y_pred_perturb_set[i_ix][:, y]
             pred_deltas.append(float(y_pred - y_pred_perturb))
 
             # Sum attributions of the random subset.
@@ -217,13 +215,61 @@ class FaithfulnessCorrelation(PerturbationMetric):
     ) -> Tuple[
         ModelInterface, np.ndarray, np.ndarray, np.ndarray, np.ndarray, Any, Any
     ]:
-
-        custom_preprocess_batch = [None for _ in x_batch]
-
         # Asserts.
         asserts.assert_value_smaller_than_input_size(
             x=x_batch, value=self.subset_size, value_name="subset_size"
         )
+        iterator = tqdm(
+            enumerate(
+                zip(
+                    x_batch,
+                    y_batch,
+                    a_batch,
+                )
+            ),
+            total=len(x_batch),
+            disable=not self.display_progressbar,
+            desc=f"Evaluating {self.__class__.__name__}",
+        )
+        perturbed_samples = np.zeros((x_batch.shape[0], self.nr_runs,
+                                      *model.shape_input(x_batch[0], x_batch[0].shape, channel_first=True).shape),
+                                     dtype=float)
+        a_ix_set = []
+        for ix, (x, y, a) in iterator:
+            for i_ix in range(self.nr_runs):
+                a = a.flatten()
+                # Randomly mask by subset size.
+                a_ix = np.random.choice(a.shape[0], self.subset_size, replace=False)
+                a_ix_set.append(a_ix)
+                x_perturbed = self.perturb_func(
+                    arr=x,
+                    indices=a_ix,
+                    indexed_axes=self.a_axes,
+                    **self.perturb_func_kwargs,
+                )
+                asserts.assert_perturbation_caused_change(x=x, x_perturbed=x_perturbed)
+
+                x_input = model.shape_input(x_perturbed, x.shape, channel_first=True)
+
+                # Append to samples.
+                perturbed_samples[ix, i_ix, :] = x_input
+
+        # Predict on perturbed input x.
+        try:
+            y_pert_samples = model.predict(perturbed_samples.reshape(x_batch.shape[0] * self.nr_runs,
+                                             *x_batch[0].flatten().shape)).astype(float)
+        except:
+            y_pert_samples = model.predict(perturbed_samples.reshape(x_batch.shape[0] * self.nr_runs,
+                                                                     *x_batch[0].shape[1:],1)).astype(float)
+        # y_pert_samples = model.predict(perturbed_samples.reshape(x_batch.shape[0] * self.nr_runs,
+        #                                                          *model.shape_input(x_batch[0], x_batch[0].shape,
+        #                                                                             channel_first=True).shape)).astype(
+        #     float)
+        a_ix_set = np.array(a_ix_set).reshape(x_batch.shape[0],self.nr_runs,np.array(a_ix_set).shape[1])
+        y_pert_samples = y_pert_samples.reshape(x_batch.shape[0],self.nr_runs,*y_pert_samples.shape[1:])
+        custom_preprocess_batch = []
+        for h in range(x_batch.shape[0]):
+            custom_preprocess_batch.append([a_ix_set[h], y_pert_samples[h]])
 
         return (
             model,
